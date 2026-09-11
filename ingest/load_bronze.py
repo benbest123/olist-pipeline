@@ -12,7 +12,7 @@ from pyspark.sql import functions as F
 
 dbutils.widgets.text("catalog", "elio_dev")
 CATALOG = dbutils.widgets.get("catalog")
-RAW_PATH = f"/Volumes/{CATALOG}/bronze/raw/olist"
+RAW_PATH = f"/Volumes/{CATALOG}/bronze/raw/"
 
 # bronze table -> source file
 FILES = {

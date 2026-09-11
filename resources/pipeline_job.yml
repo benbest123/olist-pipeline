@@ -1,0 +1,17 @@
+resources:
+  jobs:
+    elio_pipeline:
+      name: elio_pipeline
+      description: Olist medallion pipeline (setup -> bronze -> silver -> gold)
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ../pipeline/00_setup.sql

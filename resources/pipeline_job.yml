@@ -15,3 +15,9 @@ resources:
         - task_key: setup
           notebook_task:
             notebook_path: ../pipeline/00_setup.sql
+
+        - task_key: ingest_bronze
+          depends_on:
+            - task_key: setup
+          notebook_task:
+            notebook_path: ../ingest/load_bronze.py

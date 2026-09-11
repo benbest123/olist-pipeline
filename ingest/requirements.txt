@@ -1,0 +1,4 @@
+# No additional packages required for ingestion.
+# Runs on Databricks serverless compute, environment version 5
+# (Python 3.12, Spark 4.2.0), which provides pyspark and dbutils.
+# Local test/lint tooling is pinned separately in /requirements-dev.txt.

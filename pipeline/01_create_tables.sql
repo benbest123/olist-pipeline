@@ -1,4 +1,8 @@
 -- Databricks notebook source
+CREATE WIDGET TEXT catalog DEFAULT 'elio_dev';
+
+-- COMMAND ----------
+
 -- Silver tables, implementing the 3NF model in data_model.md.
 --
 -- Keys: silver uses the source's natural keys (profiling confirmed all are unique and non-null).
@@ -77,12 +81,7 @@ CREATE TABLE IF NOT EXISTS products (
   _source            STRING NOT NULL,
   _loaded_at         TIMESTAMP NOT NULL,
   CONSTRAINT products_pk PRIMARY KEY (product_id) RELY,
-  CONSTRAINT products_category_fk FOREIGN KEY (category_name) REFERENCES product_categories,
-  CONSTRAINT products_dimensions_non_negative CHECK (
-    coalesce(weight_g, 0) >= 0 AND coalesce(length_cm, 0) >= 0
-    AND coalesce(height_cm, 0) >= 0 AND coalesce(width_cm, 0) >= 0
-    AND coalesce(photos_qty, 0) >= 0
-  )
+  CONSTRAINT products_category_fk FOREIGN KEY (category_name) REFERENCES product_categories
 )
 COMMENT 'One row per product';
 
@@ -102,11 +101,7 @@ CREATE TABLE IF NOT EXISTS orders (
   _source                  STRING NOT NULL,
   _loaded_at               TIMESTAMP NOT NULL,
   CONSTRAINT orders_pk PRIMARY KEY (order_id) RELY,
-  CONSTRAINT orders_customers_fk FOREIGN KEY (customer_id) REFERENCES customers,
-  CONSTRAINT orders_status_known CHECK (
-    order_status IN ('created', 'approved', 'invoiced', 'processing',
-                     'shipped', 'delivered', 'unavailable', 'canceled')
-  )
+  CONSTRAINT orders_customers_fk FOREIGN KEY (customer_id) REFERENCES customers
 )
 CLUSTER BY (purchased_at)
 COMMENT 'One row per order. Clustered on purchase date -- most queries filter or group by it';
@@ -127,9 +122,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   CONSTRAINT order_items_pk PRIMARY KEY (order_id, order_item_id) RELY,
   CONSTRAINT order_items_orders_fk FOREIGN KEY (order_id) REFERENCES orders,
   CONSTRAINT order_items_products_fk FOREIGN KEY (product_id) REFERENCES products,
-  CONSTRAINT order_items_sellers_fk FOREIGN KEY (seller_id) REFERENCES sellers,
-  CONSTRAINT order_items_amounts_non_negative CHECK (price >= 0 AND freight_value >= 0),
-  CONSTRAINT order_items_sequence_positive CHECK (order_item_id >= 1)
+  CONSTRAINT order_items_sellers_fk FOREIGN KEY (seller_id) REFERENCES sellers
 )
 CLUSTER BY (order_id)
 COMMENT 'One row per line item';
@@ -147,11 +140,7 @@ CREATE TABLE IF NOT EXISTS order_payments (
   _source              STRING NOT NULL,
   _loaded_at           TIMESTAMP NOT NULL,
   CONSTRAINT order_payments_pk PRIMARY KEY (order_id, payment_sequential) RELY,
-  CONSTRAINT order_payments_orders_fk FOREIGN KEY (order_id) REFERENCES orders,
-  CONSTRAINT order_payments_amounts_non_negative CHECK (
-    payment_value >= 0 AND coalesce(payment_installments, 0) >= 0
-  ),
-  CONSTRAINT order_payments_sequence_positive CHECK (payment_sequential >= 1)
+  CONSTRAINT order_payments_orders_fk FOREIGN KEY (order_id) REFERENCES orders
 )
 COMMENT 'One row per payment instrument used on an order';
 
@@ -168,8 +157,7 @@ CREATE TABLE IF NOT EXISTS reviews (
   answered_at            TIMESTAMP COMMENT 'When the customer submitted it',
   _source                STRING NOT NULL,
   _loaded_at             TIMESTAMP NOT NULL,
-  CONSTRAINT reviews_pk PRIMARY KEY (review_id) RELY,
-  CONSTRAINT reviews_score_in_range CHECK (review_score BETWEEN 1 AND 5)
+  CONSTRAINT reviews_pk PRIMARY KEY (review_id) RELY
 )
 COMMENT 'One row per review';
 
@@ -185,3 +173,41 @@ CREATE TABLE IF NOT EXISTS order_reviews (
   CONSTRAINT order_reviews_orders_fk FOREIGN KEY (order_id) REFERENCES orders
 )
 COMMENT 'Links reviews to the orders they cover';
+
+-- COMMAND ----------
+
+-- CHECK constraints can only be added after creation\
+-- DROP ... IF EXISTS first keeps this cell re-runnable.
+
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_dimensions_non_negative;
+ALTER TABLE products ADD CONSTRAINT products_dimensions_non_negative CHECK (
+  coalesce(weight_g, 0) >= 0 AND coalesce(length_cm, 0) >= 0
+  AND coalesce(height_cm, 0) >= 0 AND coalesce(width_cm, 0) >= 0
+  AND coalesce(photos_qty, 0) >= 0
+);
+
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_known;
+ALTER TABLE orders ADD CONSTRAINT orders_status_known CHECK (
+  order_status IN ('created', 'approved', 'invoiced', 'processing',
+                   'shipped', 'delivered', 'unavailable', 'canceled')
+);
+
+ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_amounts_non_negative;
+ALTER TABLE order_items ADD CONSTRAINT order_items_amounts_non_negative
+  CHECK (price >= 0 AND freight_value >= 0);
+
+ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_sequence_positive;
+ALTER TABLE order_items ADD CONSTRAINT order_items_sequence_positive
+  CHECK (order_item_id >= 1);
+
+ALTER TABLE order_payments DROP CONSTRAINT IF EXISTS order_payments_amounts_non_negative;
+ALTER TABLE order_payments ADD CONSTRAINT order_payments_amounts_non_negative
+  CHECK (payment_value >= 0 AND coalesce(payment_installments, 0) >= 0);
+
+ALTER TABLE order_payments DROP CONSTRAINT IF EXISTS order_payments_sequence_positive;
+ALTER TABLE order_payments ADD CONSTRAINT order_payments_sequence_positive
+  CHECK (payment_sequential >= 1);
+
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_score_in_range;
+ALTER TABLE reviews ADD CONSTRAINT reviews_score_in_range
+  CHECK (review_score BETWEEN 1 AND 5);

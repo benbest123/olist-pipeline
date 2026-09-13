@@ -1,4 +1,8 @@
 -- Databricks notebook source
+CREATE WIDGET TEXT catalog DEFAULT 'elio_dev';
+
+-- COMMAND ----------
+
 CREATE CATALOG IF NOT EXISTS IDENTIFIER(:catalog);
 USE CATALOG IDENTIFIER(:catalog);
 

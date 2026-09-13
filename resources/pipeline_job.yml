@@ -28,4 +28,9 @@ resources:
           notebook_task:
             notebook_path: ../pipeline/01_create_tables.sql
 
-            
+        - task_key: bronze_to_silver
+          depends_on:
+            - task_key: create_tables_silver
+          notebook_task:
+            notebook_path: ../pipeline/02_bronze_to_silver.py
+

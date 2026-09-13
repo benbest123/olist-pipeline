@@ -174,10 +174,142 @@ CREATE TABLE IF NOT EXISTS order_reviews (
 )
 COMMENT 'Links reviews to the orders they cover';
 
+-- GOLD LAYER
+
+-- Gold: star schema. Dimensions use deterministic sha2 surrogate keys, so a rebuild reproduces
+-- identical keys and the facts can be rebuilt independently of the dimensions.
+
+USE SCHEMA gold;
+
 -- COMMAND ----------
 
--- CHECK constraints can only be added after creation\
+CREATE TABLE IF NOT EXISTS dim_date (
+  date_key     INT NOT NULL COMMENT 'yyyyMMdd -- readable in raw fact rows and sortable',
+  date         DATE NOT NULL,
+  year         INT NOT NULL,
+  quarter      INT NOT NULL,
+  month        INT NOT NULL,
+  year_month   STRING NOT NULL,
+  week_of_year INT NOT NULL,
+  day_of_week  INT NOT NULL,
+  day_name     STRING NOT NULL,
+  is_weekend   BOOLEAN NOT NULL,
+  CONSTRAINT dim_date_pk PRIMARY KEY (date_key) RELY
+)
+COMMENT 'One row per calendar day across the order history, generated so there are no gaps';
+
+-- COMMAND ----------
+
+CREATE TABLE IF NOT EXISTS dim_product (
+  product_key         STRING NOT NULL,
+  product_id          STRING NOT NULL,
+  category            STRING COMMENT 'English category, falling back to Portuguese then "unknown"',
+  category_portuguese STRING,
+  weight_g            INT,
+  photos_qty          INT,
+  volume_cm3          BIGINT COMMENT 'length x height x width; null if any dimension is missing',
+  CONSTRAINT dim_product_pk PRIMARY KEY (product_key) RELY
+)
+COMMENT 'Product with its category flattened in';
+
+-- COMMAND ----------
+
+CREATE TABLE IF NOT EXISTS dim_seller (
+  seller_key             STRING NOT NULL,
+  seller_id              STRING NOT NULL,
+  seller_city            STRING,
+  seller_state           STRING,
+  seller_zip_code_prefix STRING,
+  CONSTRAINT dim_seller_pk PRIMARY KEY (seller_key) RELY
+)
+COMMENT 'Seller with its location flattened in';
+
+-- COMMAND ----------
+
+-- Denormalisation: silver keys customers per order, this is one row per real person.
+CREATE TABLE IF NOT EXISTS dim_customer (
+  customer_key              STRING NOT NULL,
+  customer_unique_id        STRING NOT NULL,
+  customer_city             STRING,
+  customer_state            STRING,
+  customer_zip_code_prefix  STRING,
+  customer_latitude         DOUBLE,
+  customer_longitude        DOUBLE,
+  first_order_at            TIMESTAMP,
+  last_order_at             TIMESTAMP,
+  lifetime_orders           BIGINT NOT NULL COMMENT 'All orders, whatever their status',
+  lifetime_fulfilled_orders BIGINT NOT NULL COMMENT 'Excludes canceled and unavailable',
+  lifetime_revenue          DECIMAL(12,2) NOT NULL COMMENT 'Sum of order_value over fulfilled orders only',
+  is_repeat_customer        BOOLEAN NOT NULL,
+  CONSTRAINT dim_customer_pk PRIMARY KEY (customer_key) RELY
+)
+COMMENT 'One row per person. Location taken from their most recent order; 250 people have more than one';
+
+-- COMMAND ----------
+
+-- Order grain: measures that would be non-additive if repeated on every item row.
+CREATE TABLE IF NOT EXISTS fact_order (
+  order_id               STRING NOT NULL COMMENT 'Degenerate dimension -- kept for grouping and drill-back',
+  customer_key           STRING NOT NULL,
+  purchase_date_key      INT NOT NULL,
+  purchased_at           TIMESTAMP NOT NULL,
+  order_status           STRING NOT NULL,
+  is_fulfilled           BOOLEAN NOT NULL COMMENT 'False for canceled and unavailable',
+  item_value             DECIMAL(12,2) NOT NULL COMMENT 'Sum of line item prices, excluding freight',
+  freight_value          DECIMAL(12,2) NOT NULL,
+  order_value            DECIMAL(12,2) NOT NULL COMMENT 'item_value + freight_value',
+  amount_paid            DECIMAL(12,2) COMMENT 'What the customer settled; agrees with order_value for 98.9% of orders',
+  item_count             INT NOT NULL COMMENT 'Zero for the 775 orders with no line items',
+  distinct_product_count INT NOT NULL,
+  distinct_seller_count  INT NOT NULL,
+  primary_payment_type   STRING COMMENT 'Type of the largest instrument used on the order',
+  max_installments       INT,
+  review_score           DECIMAL(3,2) COMMENT 'Averaged where an order has more than one review',
+  review_count           INT NOT NULL,
+  delivery_days          INT COMMENT 'Null unless the order reached the customer',
+  days_early             INT COMMENT 'Estimated minus actual delivery; negative means late',
+  is_late                BOOLEAN COMMENT 'Null, not false, where delivery never happened',
+  CONSTRAINT fact_order_pk PRIMARY KEY (order_id) RELY,
+  CONSTRAINT fact_order_customer_fk FOREIGN KEY (customer_key) REFERENCES dim_customer,
+  CONSTRAINT fact_order_date_fk FOREIGN KEY (purchase_date_key) REFERENCES dim_date
+)
+CLUSTER BY (purchase_date_key)
+COMMENT 'One row per order, including the 775 with no line items';
+
+-- COMMAND ----------
+
+-- Item grain: the only grain at which revenue attributes to a product, category or seller.
+CREATE TABLE IF NOT EXISTS fact_order_item (
+  order_id          STRING NOT NULL,
+  order_item_id     INT NOT NULL,
+  customer_key      STRING NOT NULL,
+  product_key       STRING NOT NULL,
+  seller_key        STRING NOT NULL,
+  purchase_date_key INT NOT NULL,
+  purchased_at      TIMESTAMP NOT NULL,
+  order_status      STRING NOT NULL,
+  is_fulfilled      BOOLEAN NOT NULL,
+  item_value        DECIMAL(12,2) NOT NULL COMMENT 'Line item price, excluding freight',
+  freight_value     DECIMAL(12,2) NOT NULL COMMENT 'Olist apportions freight across an order items, so this sums correctly',
+  gross_item_value  DECIMAL(12,2) NOT NULL COMMENT 'item_value + freight_value',
+  CONSTRAINT fact_order_item_pk PRIMARY KEY (order_id, order_item_id) RELY,
+  CONSTRAINT fact_order_item_customer_fk FOREIGN KEY (customer_key) REFERENCES dim_customer,
+  CONSTRAINT fact_order_item_product_fk FOREIGN KEY (product_key) REFERENCES dim_product,
+  CONSTRAINT fact_order_item_seller_fk FOREIGN KEY (seller_key) REFERENCES dim_seller,
+  CONSTRAINT fact_order_item_date_fk FOREIGN KEY (purchase_date_key) REFERENCES dim_date
+)
+CLUSTER BY (purchase_date_key)
+COMMENT 'One row per order line item. All measures are additive';
+
+
+
+-- COMMAND ----------
+
+-- CHECK constraints can only be added after creation
 -- DROP ... IF EXISTS first keeps this cell re-runnable.
+
+-- Silver CHECK constraints
+
 
 ALTER TABLE products DROP CONSTRAINT IF EXISTS products_dimensions_non_negative;
 ALTER TABLE products ADD CONSTRAINT products_dimensions_non_negative CHECK (
@@ -211,3 +343,23 @@ ALTER TABLE order_payments ADD CONSTRAINT order_payments_sequence_positive
 ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_score_in_range;
 ALTER TABLE reviews ADD CONSTRAINT reviews_score_in_range
   CHECK (review_score BETWEEN 1 AND 5);
+
+-- COMMAND ----------
+
+-- Gold CHECK constraints
+
+ALTER TABLE fact_order DROP CONSTRAINT IF EXISTS fact_order_amounts_non_negative;
+ALTER TABLE fact_order ADD CONSTRAINT fact_order_amounts_non_negative
+  CHECK (item_value >= 0 AND freight_value >= 0 AND order_value >= 0);
+
+ALTER TABLE fact_order DROP CONSTRAINT IF EXISTS fact_order_review_score_in_range;
+ALTER TABLE fact_order ADD CONSTRAINT fact_order_review_score_in_range
+  CHECK (review_score IS NULL OR review_score BETWEEN 1 AND 5);
+
+ALTER TABLE fact_order_item DROP CONSTRAINT IF EXISTS fact_order_item_amounts_non_negative;
+ALTER TABLE fact_order_item ADD CONSTRAINT fact_order_item_amounts_non_negative
+  CHECK (item_value >= 0 AND freight_value >= 0);
+
+ALTER TABLE dim_customer DROP CONSTRAINT IF EXISTS dim_customer_lifetime_non_negative;
+ALTER TABLE dim_customer ADD CONSTRAINT dim_customer_lifetime_non_negative
+  CHECK (lifetime_orders >= 1 AND lifetime_revenue >= 0);

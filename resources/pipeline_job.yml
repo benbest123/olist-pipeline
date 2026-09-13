@@ -34,3 +34,9 @@ resources:
           notebook_task:
             notebook_path: ../pipeline/02_bronze_to_silver.py
 
+        - task_key: silver_to_gold
+          depends_on:
+            - task_key: bronze_to_silver
+          notebook_task:
+            notebook_path: ../pipeline/03_silver_to_gold.py
+

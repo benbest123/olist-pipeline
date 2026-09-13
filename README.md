@@ -3,7 +3,7 @@
 A medallion pipeline over the Olist Brazilian e-commerce dataset: raw CSVs land in bronze, are
 conformed into a 3NF silver model, and are denormalised into a gold star schema for analytics.
 
-**Status:** Part A1–A3 complete (bronze, data model, silver). Gold, analytics SQL and Part B in
+**Status:** Part A1–A4 complete (bronze, data model, silver, gold). Analytics SQL and Part B in
 progress.
 
 ## Dataset
@@ -66,6 +66,7 @@ The job runs four tasks in order:
 | `ingest_bronze` | `ingest/load_bronze.py` | Lands the 9 CSVs as-is into bronze Delta tables |
 | `create_tables` | `pipeline/01_create_tables.sql` | Declares the silver tables, types and constraints |
 | `bronze_to_silver` | `pipeline/02_bronze_to_silver.py` | Cleans, conforms and deduplicates into silver |
+| `silver_to_gold` | `pipeline/03_silver_to_gold.py` | Denormalises silver into the gold star schema |
 
 Every task takes a `catalog` parameter, supplied by the bundle (`elio_dev` or `elio_prod`), so the
 same code runs against either environment. Each stage fully overwrites its output, so the pipeline
@@ -92,7 +93,14 @@ match the published dataset. Read options and assumptions are documented in
 [`pipeline/data_model.md`](pipeline/data_model.md). Keys are the source's natural keys, which
 profiling confirmed are unique; enforcement comes from `NOT NULL` and `CHECK` constraints.
 
-**Gold** — star schema. _In progress._
+**Gold** — 6 tables ready for analytics (4 dim, 2 fact):
+
+| Table | Grain | Holds |
+|---|---|---|
+| `fact_order_item` | one line item | Revenue attributable to a product, category and seller. All measures additive |
+| `fact_order` | one order | Delivery time, review score and payment — order-grain measures that would be non-additive if repeated on every item row |
+| `dim_customer` | one real person | Regrained from silver's per-order customer records: 99,441 records, 96,096 people |
+| `dim_product`, `dim_seller`, `dim_date` | | Categories and locations flattened in; `dim_date` generated so there are no gaps |
 
 ## CI/CD
 

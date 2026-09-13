@@ -21,3 +21,11 @@ resources:
             - task_key: setup
           notebook_task:
             notebook_path: ../ingest/load_bronze.py
+
+        - task_key: create_tables_silver
+          depends_on:
+            - task_key: ingest_bronze
+          notebook_task:
+            notebook_path: ../pipeline/01_create_tables.sql
+
+            

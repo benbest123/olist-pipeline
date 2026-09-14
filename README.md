@@ -3,8 +3,6 @@
 A medallion pipeline over the Olist Brazilian e-commerce dataset: raw CSVs land in bronze, are
 conformed into a 3NF silver model, and are denormalised into a gold star schema for analytics.
 
-**Status:** Part A1–A4 complete (bronze, data model, silver, gold). Analytics SQL and Part B in
-progress.
 
 ## Dataset
 
@@ -34,8 +32,10 @@ to scrutiny.
 ingest/              load_bronze.py, profile_bronze.py, README.md, requirements.txt
 pipeline/            00_setup.sql, 01_create_tables.sql, 02_bronze_to_silver.py,
                      transforms/silver.py, data_model.md
+sql/                 analytics_queries.sql
 resources/           pipeline_job.yml — the job definition
 tests/               unit tests for the transforms, run in CI without Databricks
+analysis_answers.md  data analysis and recommendations
 databricks.yml       asset bundle: dev and prod targets
 ```
 
@@ -83,6 +83,10 @@ ruff check . && pytest -q
 The transform logic is plain functions taking and returning DataFrames, so it runs on a local
 Spark session with no Databricks connection.
 
+### 4. Run the analytics
+
+sql/analytics_queries.sql runs against the gold layer, either in a SQL editor or as a notebook. Set the catalog at the top (USE CATALOG elio_dev;) and run the cells in order.
+
 ## The layers
 
 **Bronze** — every column as STRING, no cleaning, plus `_source_file` and `_loaded_at`. Row counts
@@ -102,6 +106,10 @@ profiling confirmed are unique; enforcement comes from `NOT NULL` and `CHECK` co
 | `dim_customer` | one real person | Regrained from silver's per-order customer records: 99,441 records, 96,096 people |
 | `dim_product`, `dim_seller`, `dim_date` | | Categories and locations flattened in; `dim_date` generated so there are no gaps |
 
+## Analysis
+
+analysis_answers.md contains the commercial findings, the recommendation and the caveats behind them, written for a non-technical reader. Every figure cites the query that produced it.
+
 ## CI/CD
 
 | Trigger | Workflow | What runs |
@@ -113,11 +121,18 @@ profiling confirmed are unique; enforcement comes from `NOT NULL` and `CHECK` co
 Deploying and running are deliberately separate: a merge updates the prod job definition but never
 reprocesses data. Production runs are triggered explicitly.
 
-## Assumptions and shortcuts
+## Idempotency and environments
 
-- **Uploading the source files is manual**, for the network reason above. In production the source
-  system would drop files into the landing volume and Auto Loader would pick them up incrementally.
-- **Every stage is a full overwrite.** Olist is a static snapshot, so this is the simplest
-  idempotent option.
-- **Dev and prod are two catalogs in one workspace**, since Free Edition provides a single
-  workspace. The bundle switches between them with one variable.
+Every stage fully overwrites its output, so running the pipeline twice produces the same result as running it once. This holds because each layer is derived deterministically from the one below it:
+
+- Bronze overwrites from the source files. Schema overwrite is deliberately not enabled, so a changed source fails the load rather than silently reshaping the table.
+- Silver deduplicates on each table's primary key using an explicit ordering, so a re-run selects the same row rather than an arbitrary one.
+- Gold derives surrogate keys as sha2 hashes of the natural key. A rebuild reproduces identical keys, so facts and dimensions can be rebuilt independently without orphaning rows.
+- Writes use insertInto, which replaces rows but keeps the table definition, so the declared types and constraints are enforced on every run and a transform that drifts from the DDL fails.
+
+Verified by running the full pipeline twice and comparing row counts, revenue totals and a checksum of the surrogate keys, and again by comparing elio_dev against elio_prod, with two separate runs of the same code producing identical output.
+
+Dev and prod are separate Unity Catalog catalogs, selected by a single bundle variable. The dev target deploys under the developer's own workspace folder and prefixes the job name; the prod target deploys to a fixed path.
+
+### What would change with a live source.
+The full overwrite suits a static snapshot and keeps no history. For incremental file drops, bronze would move to Auto Loader, which tracks which files it has already processed and so stays idempotent while appending. ilver would MERGE on its keys rather than overwrite, and gold would either continue rebuilding or move to MERGE driven by Delta change data feed. Dimensions would also need Type 2 history to answer point-in-time questions, which the current Type 1 rebuild cannot.
